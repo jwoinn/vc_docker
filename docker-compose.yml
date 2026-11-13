@@ -1,0 +1,29 @@
+services:
+  vc_docker:
+    image: vc_docker
+
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: vc_docker
+
+    network_mode: host
+
+    gpus: all
+
+    # devices:
+    #   - /dev/snd:/dev/snd
+
+    volumes:
+      - $HOME/.Xauthority:/root/.Xauthority:ro
+
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///cyclonedds.xml
+      - XAUTHORITY=/root/.Xauthority
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+    stdin_open: true
+    tty: true
