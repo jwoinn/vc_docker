@@ -1,0 +1,9 @@
+# Nada de esto debe ir al contexto del build: va por volúmenes.
+# Sin este archivo, Docker enviaría los GB de modelos en cada build.
+repos/
+workspace/
+models/
+llama.cpp/
+**/*.gguf
+**/*.onnx
+**/.git

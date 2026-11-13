@@ -1,0 +1,181 @@
+# syntax=docker/dockerfile:1.7
+#
+# ============================================================
+#  voisis-base: dependencias pesadas y estables
+# ============================================================
+#  Se construye UNA vez (o cuando cambias una dependencia):
+#
+#    docker build -f Dockerfile.base -t voisis-base:latest \
+#        --build-arg CUDA_ARCHITECTURES=86 .
+#
+#  No contiene código ni modelos: eso va por volúmenes
+#  (ver docker-compose.yml).
+# ============================================================
+
+ARG BASE_OS=ros:jazzy-ros-base
+FROM ${BASE_OS}
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+# Arquitectura(s) CUDA para compilar llama-cpp-python.
+# Poner SOLO la de tu GPU reduce mucho el tiempo de compilación:
+#   75 = RTX 20xx / GTX 16xx / T4
+#   86 = RTX 30xx / A10 / Jetson Orin = 87
+#   89 = RTX 40xx / L4
+#   120 = RTX 50xx
+# Puedes verla con: nvidia-smi --query-gpu=compute_cap --format=csv
+ARG CUDA_ARCHITECTURES="75;86;89;120"
+
+# Procesos de compilación en paralelo. Cada uno con nvcc puede usar
+# 1-2 GB de RAM; súbelo solo si tienes memoria de sobra.
+ARG BUILD_JOBS=4
+
+# Solo lo necesario de CUDA para compilar llama.cpp (~1-2 GB en vez de ~8 GB).
+# Si la compilación de llama-cpp-python falla por algo faltante,
+# reemplázalo por "cuda-toolkit-12-8".
+ARG CUDA_PACKAGES="cuda-nvcc-12-8 cuda-cudart-dev-12-8 cuda-cccl-12-8 libcublas-dev-12-8 cuda-driver-dev-12-8"
+
+ENV LANG=en_US.UTF-8
+ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+
+##### Sistema #####
+# Sin full-upgrade: actualizaba todos los paquetes ROS de la imagen base.
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        gnupg \
+        wget \
+        git \
+        git-lfs \
+        nano \
+        python3-dev \
+        python3-full \
+        python3-pip \
+        python3-setuptools \
+        python3-wheel \
+        python3-venv \
+        python3-lark \
+        python3-requests \
+        portaudio19-dev \
+        libsndfile1 \
+        ros-jazzy-rmw-cyclonedds-cpp && \
+    git lfs install --system && \
+    rm -rf /var/lib/apt/lists/*
+
+##### CUDA (mínimo para compilar) #####
+
+RUN wget -4 \
+        --tries=10 \
+        --timeout=120 \
+        --waitretry=15 \
+        https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
+    && dpkg -i cuda-keyring_1.1-1_all.deb \
+    && rm cuda-keyring_1.1-1_all.deb \
+    && printf '%s\n' \
+        'Acquire::Retries "10";' \
+        'Acquire::http::Timeout "120";' \
+        'Acquire::https::Timeout "120";' \
+        > /etc/apt/apt.conf.d/80-retries \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ${CUDA_PACKAGES} \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sfn /usr/local/cuda-12.8 /usr/local/cuda
+
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH="/usr/local/cuda/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64"
+
+##### venv #####
+
+RUN python3 -m venv /opt/venv
+
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --upgrade pip wheel && \
+    python -m pip install "setuptools==75.8.2"
+
+##### PyTorch + OmniVoice (en un solo paso) #####
+# Juntos para que pip resuelva una sola versión de torch y no
+# descargue dos veces si omnivoice pide otra.
+# El cache mount guarda las descargas entre builds: si este paso
+# se rehace, no vuelve a bajar los GB de torch.
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install \
+        torch \
+        torchaudio \
+        torchvision \
+        omnivoice
+
+##### Resto de dependencias Python #####
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install \
+        huggingface_hub \
+        faster-whisper \
+        sounddevice \
+        pyaudio \
+        catkin_pkg \
+        Cython \
+        lark \
+        numpy \
+        scipy \
+        empy \
+        soundfile \
+        transformers \
+        onnxruntime \
+        "scikit-build-core>=0.10" \
+        ninja \
+        cmake
+
+##### llama-cpp-python (única compilación de llama.cpp en el build) #####
+# Sin cache mount a propósito: pip guarda la wheel compilada y la
+# reutilizaría aunque cambies CUDA_ARCHITECTURES.
+# Los stubs de libcuda permiten enlazar sin GPU durante el build.
+
+RUN CMAKE_ARGS="-DGGML_CUDA=ON -DGGML_NATIVE=OFF -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES} -DLLAMA_CURL=OFF" \
+    FORCE_CMAKE=1 \
+    CMAKE_BUILD_PARALLEL_LEVEL=${BUILD_JOBS} \
+    LIBRARY_PATH=/usr/local/cuda/lib64/stubs \
+    python -m pip install --no-cache-dir --verbose llama-cpp-python
+
+##### Verificación (sin GPU: solo imports) #####
+
+RUN python - <<'PY'
+import importlib, importlib.util
+
+for mod in ["torch", "torchaudio", "omnivoice", "faster_whisper",
+            "onnxruntime", "transformers", "sounddevice", "pyaudio"]:
+    importlib.import_module(mod)
+    print(f"OK  {mod}")
+
+# llama_cpp necesita libcuda.so.1 real para importarse: se prueba en runtime
+if importlib.util.find_spec("llama_cpp") is None:
+    raise RuntimeError("llama_cpp no quedó instalado")
+print("OK  llama_cpp (instalado, import con GPU se prueba en runtime)")
+
+import torch
+print("PyTorch", torch.__version__, "| CUDA build:", torch.version.cuda)
+PY
+
+##### Entorno final #####
+
+# smart-turn no es un paquete instalable: se agrega al path para
+# que `import inference` funcione desde smartVAD_Node.
+ENV PYTHONPATH="/opt/venv/lib/python3.12/site-packages:/home/voice_ws/src/smart-turn"
+
+# El código de voisis tiene rutas fijas a /home/bender/voice_ws/...
+# Este enlace las hace válidas dentro del container sin tocar el código.
+RUN mkdir -p /home/bender /home/voice_ws && \
+    ln -sfn /home/voice_ws /home/bender/voice_ws
+
+RUN printf '%s\n' \
+        'source /opt/ros/jazzy/setup.bash' \
+        'source /opt/venv/bin/activate' \
+        'if [ -f /home/voice_ws/install/setup.bash ]; then source /home/voice_ws/install/setup.bash; fi' \
+        >> /root/.bashrc
+
+WORKDIR /home/voice_ws

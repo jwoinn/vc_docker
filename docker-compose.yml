@@ -1,29 +1,98 @@
-services:
-  vc_docker:
-    image: vc_docker
+# ============================================================
+#  voisis con GPU, audio y volúmenes
+#
+#  Estructura esperada en el host (la crea docker/setup_host.sh):
+#    voisis/
+#    ├── docker/             <- este archivo y todo lo de Docker
+#    ├── repos/voisis        <- git clone (tu código)
+#    ├── repos/smart-turn    <- git clone
+#    ├── workspace/          <- build/ install/ log/ de colcon
+#    ├── models/             <- GGUF y ONNX (se descargan solos)
+#    └── llama.cpp/          <- opcional, para build_llama_cpp
+#
+#  Las rutas relativas se resuelven desde docker/, por eso usan ../
+#
+#  Uso (desde docker/):
+#    docker compose --profile base build voisis-base   # 1 vez (la parte larga)
+#    docker compose run --rm voisis                    # siempre
+#
+#  Las opciones del build (arquitectura CUDA, etc.) se leen de .env,
+#  que setup_host.sh crea detectando tu GPU.
+# ============================================================
 
+services:
+  # Imagen pesada (ROS, CUDA, torch, llama-cpp-python).
+  # Está en el perfil "base" para que no se construya ni se ejecute
+  # sin pedirlo: solo con --profile base.
+  voisis-base:
+    profiles: ["base"]
+    image: voisis-base:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.base
+      args:
+        CUDA_ARCHITECTURES: "${CUDA_ARCHITECTURES:-75;86;89;120}"
+        BUILD_JOBS: "${BUILD_JOBS:-4}"
+
+  # Imagen liviana + el container que usas.
+  # Si la imagen voisis:latest no existe, `docker compose run` la
+  # construye sola. Para reconstruirla: docker compose run --build ...
+  voisis:
+    image: voisis:latest
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: voisis-base:latest
+    container_name: voisis
 
-    container_name: vc_docker
-
+    # ROS 2 / DDS y la tablet necesitan ver la red del host
     network_mode: host
-
-    gpus: all
-
-    # devices:
-    #   - /dev/snd:/dev/snd
-
-    volumes:
-      - $HOME/.Xauthority:/root/.Xauthority:ro
-
-    environment:
-      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-      - CYCLONEDDS_URI=file:///cyclonedds.xml
-      - XAUTHORITY=/root/.Xauthority
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    ipc: host
 
     stdin_open: true
     tty: true
+
+    # Micrófono y parlantes
+    devices:
+      - /dev/snd:/dev/snd
+    group_add:
+      - audio
+
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      # Here (not only in the entrypoint) so `docker exec` shells get it too
+      - CYCLONEDDS_URI=file:///cyclonedds.xml
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - VOISIS_REBUILD=${VOISIS_REBUILD:-0}
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+    # Formato:  RUTA_EN_EL_HOST : RUTA_EN_EL_CONTAINER
+    # Solo cambia el lado IZQUIERDO, y hazlo en el archivo .env
+    # (ver .env.example). El lado derecho es fijo: el código lo espera ahí.
+    volumes:
+      # Workspace de colcon (build/install/log persisten en el host)
+      - ${WORKSPACE_DIR:-../workspace}:/home/voice_ws
+      # Código: edita en el host y se refleja al instante
+      - ${VOISIS_DIR:-../repos/voisis}:/home/voice_ws/src/voisis
+      # colcon no entra a subcarpetas de un paquete, por eso
+      # voisis_interfaces se monta aparte (antes se hacía con mv)
+      - ${VOISIS_DIR:-../repos/voisis}/voisis_interfaces:/home/voice_ws/src/voisis_interfaces
+      - ${SMART_TURN_DIR:-../repos/smart-turn}:/home/voice_ws/src/smart-turn
+      # Modelos propios (Qwen, Smart Turn)
+      - ${MODELS_HOST_DIR:-../models}:/models
+      # Caché de Hugging Face: OmniVoice y Whisper se descargan una sola vez
+      - hf-cache:/root/.cache/huggingface
+      # Opcional: llama.cpp compilado dentro del container
+      - ${LLAMA_CPP_DIR:-../llama.cpp}:/opt/llama.cpp
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  hf-cache:
