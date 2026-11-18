@@ -17,13 +17,7 @@ FROM ${BASE_OS}
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Arquitectura(s) CUDA para compilar llama-cpp-python.
-# Poner SOLO la de tu GPU reduce mucho el tiempo de compilación:
-#   75 = RTX 20xx / GTX 16xx / T4
-#   86 = RTX 30xx / A10 / Jetson Orin = 87
-#   89 = RTX 40xx / L4
-#   120 = RTX 50xx
-# Puedes verla con: nvidia-smi --query-gpu=compute_cap --format=csv
+#arquitectura de cuda se encuentra con el setup_host.sh
 ARG CUDA_ARCHITECTURES="75;86;89;120"
 
 # Procesos de compilación en paralelo. Cada uno con nvcc puede usar
@@ -39,7 +33,6 @@ ENV LANG=en_US.UTF-8
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 ##### Sistema #####
-# Sin full-upgrade: actualizaba todos los paquetes ROS de la imagen base.
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \

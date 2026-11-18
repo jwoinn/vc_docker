@@ -1,25 +1,3 @@
-# ============================================================
-#  voisis con GPU, audio y volúmenes
-#
-#  Estructura esperada en el host (la crea docker/setup_host.sh):
-#    voisis/
-#    ├── docker/             <- este archivo y todo lo de Docker
-#    ├── repos/voisis        <- git clone (tu código)
-#    ├── repos/smart-turn    <- git clone
-#    ├── workspace/          <- build/ install/ log/ de colcon
-#    ├── models/             <- GGUF y ONNX (se descargan solos)
-#    └── llama.cpp/          <- opcional, para build_llama_cpp
-#
-#  Las rutas relativas se resuelven desde docker/, por eso usan ../
-#
-#  Uso (desde docker/):
-#    docker compose --profile base build voisis-base   # 1 vez (la parte larga)
-#    docker compose run --rm voisis                    # siempre
-#
-#  Las opciones del build (arquitectura CUDA, etc.) se leen de .env,
-#  que setup_host.sh crea detectando tu GPU.
-# ============================================================
-
 services:
   # Imagen pesada (ROS, CUDA, torch, llama-cpp-python).
   # Está en el perfil "base" para que no se construya ni se ejecute
@@ -33,7 +11,7 @@ services:
       args:
         CUDA_ARCHITECTURES: "${CUDA_ARCHITECTURES:-75;86;89;120}"
         BUILD_JOBS: "${BUILD_JOBS:-4}"
-
+ 
   # Imagen liviana + el container que usas.
   # Si la imagen voisis:latest no existe, `docker compose run` la
   # construye sola. Para reconstruirla: docker compose run --build ...
@@ -45,20 +23,21 @@ services:
       args:
         BASE_IMAGE: voisis-base:latest
     container_name: voisis
-
+ 
     # ROS 2 / DDS y la tablet necesitan ver la red del host
     network_mode: host
     ipc: host
-
+ 
     stdin_open: true
     tty: true
-
+ 
     # Micrófono y parlantes
     devices:
       - /dev/snd:/dev/snd
+      - /dev/reSpeaker:/dev/reSpeaker
     group_add:
       - audio
-
+ 
     environment:
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       # Here (not only in the entrypoint) so `docker exec` shells get it too
@@ -66,7 +45,10 @@ services:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - VOISIS_REBUILD=${VOISIS_REBUILD:-0}
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-
+      # Optional Hugging Face token (set it in .env): faster downloads,
+      # no rate-limit warning. Empty = anonymous, works the same.
+      - HF_TOKEN=${HF_TOKEN:-}
+ 
     # Formato:  RUTA_EN_EL_HOST : RUTA_EN_EL_CONTAINER
     # Solo cambia el lado IZQUIERDO, y hazlo en el archivo .env
     # (ver .env.example). El lado derecho es fijo: el código lo espera ahí.
@@ -85,7 +67,7 @@ services:
       - hf-cache:/root/.cache/huggingface
       # Opcional: llama.cpp compilado dentro del container
       - ${LLAMA_CPP_DIR:-../llama.cpp}:/opt/llama.cpp
-
+ 
     deploy:
       resources:
         reservations:
@@ -93,6 +75,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-
+ 
 volumes:
   hf-cache:
+ 

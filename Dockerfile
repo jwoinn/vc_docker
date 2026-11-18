@@ -14,6 +14,15 @@
 ARG BASE_IMAGE=voisis-base:latest
 FROM ${BASE_IMAGE}
 
+# Small system packages go HERE, not in Dockerfile.base: adding them
+# to the base would invalidate its first layer and rebuild everything.
+# ffmpeg: needed by pydub/OmniVoice to load and convert audio.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ffmpeg \
+        alsa-utils && \
+    rm -rf /var/lib/apt/lists/*
+    
 COPY config/cyclonedds.xml /cyclonedds.xml
 COPY entrypoint.sh /entrypoint.sh
 COPY scripts/build_llama_cpp.sh /usr/local/bin/build_llama_cpp

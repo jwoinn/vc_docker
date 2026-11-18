@@ -154,4 +154,4 @@ echo
 echo "Listo. Siguientes pasos:"
 echo "  cd $DOCKER_DIR"
 echo "  docker compose --profile base build voisis-base   # una vez, demora"
-echo "  docker compose run --rm voisis"
+echo "  docker compose up -d   # up se salta el dockerfile base"

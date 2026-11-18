@@ -1,0 +1,3 @@
+# --- reSpeaker ---
+
+KERNEL=="hidraw*", ATTRS{idVendor}=="2886", ATTRS{idProduct}=="001e", SYMLINK+= "reSpeaker", MODE:="0666"
