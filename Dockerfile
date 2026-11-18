@@ -17,12 +17,20 @@ FROM ${BASE_IMAGE}
 # Small system packages go HERE, not in Dockerfile.base: adding them
 # to the base would invalidate its first layer and rebuild everything.
 # ffmpeg: needed by pydub/OmniVoice to load and convert audio.
+# alsa-utils: aplay/arecord/alsamixer, to test mic and speakers.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ffmpeg \
         alsa-utils && \
     rm -rf /var/lib/apt/lists/*
-    
+
+# Small Python fixes go HERE too (same reason as above).
+# av<15: PyAV 15 removed av.open(metadata_errors=...), which
+# faster-whisper still passes -> "unexpected keyword argument".
+# --only-binary: use a prebuilt wheel; building av from source needs
+# FFmpeg 7 dev libraries that this image doesn't have.
+RUN python -m pip install --no-cache-dir --only-binary=av "av<15"
+
 COPY config/cyclonedds.xml /cyclonedds.xml
 COPY entrypoint.sh /entrypoint.sh
 COPY scripts/build_llama_cpp.sh /usr/local/bin/build_llama_cpp
